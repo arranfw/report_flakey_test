@@ -1,0 +1,63 @@
+name: Report Flakey Test
+on:
+  workflow_dispatch:
+    inputs:
+      title_prefix:
+        required: false
+        type: string
+        default: '[FLAKE]: '
+      title:
+        required: true
+        type: string
+        default: 'test'
+      date:
+        required: true
+        type: string
+        default: '2024-08-09T12:00:00Z'
+  workflow_call:
+    inputs:
+      title_prefix:
+        required: false
+        type: string
+        default: '[FLAKE]: '
+      title:
+        required: true
+        type: string
+      date:
+        required: true
+        type: string
+jobs:
+  find_existing_issue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      issue_number: ${{ steps.names.outputs.issue_number }}
+      issue_body: ${{ steps.names.outputs.issue_body }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get existing issue number
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          issue_json=$(gh issue list \
+            --search "${{ inputs.title }}" \
+            --json number,body \
+            --jq '.[0]')
+          
+          issue_number=$(jq '.number' <<<  $issue_json)
+          issue_body=$(jq '.body' <<<  $issue_json)
+
+          if [[ -n $issue_number ]];
+          then
+            echo "Found ${{ inputs.title }}: ${issue_number}"
+            echo "issue_number=${issue_number}" >> $GITHUB_OUTPUT
+            echo "issue_body=${issue_body}" >> $GITHUB_OUTPUT
+          else 
+            echo "No existing issue found"
+          fi
+  create_new_issue:
+    steps:
+      - name: Create new issue
+        if: steps.find_existing_issue.outputs.issue_number != ''      
+        run: |
+          echo "Found existing issue: ${{ steps.find_existing_issue.outputs.issue_number }}"
