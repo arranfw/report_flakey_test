@@ -9,11 +9,11 @@ on:
       title:
         required: true
         type: string
-        default: 'test'
+        default: 'test4'
       date:
         required: true
         type: string
-        default: '2024-08-09T12:00:00Z'
+        default: '2024-08-09'
   workflow_call:
     inputs:
       title_prefix:
@@ -31,33 +31,86 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
-      issue_number: ${{ steps.names.outputs.issue_number }}
-      issue_body: ${{ steps.names.outputs.issue_body }}
+      issue_number: ${{ steps.existing_issue.outputs.issue_number }}
     steps:
       - uses: actions/checkout@v4
       - name: Get existing issue number
+        id: existing_issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           issue_json=$(gh issue list \
             --search "${{ inputs.title }}" \
-            --json number,body \
+            --state open \
+            --json number \
             --jq '.[0]')
-          
+
           issue_number=$(jq '.number' <<<  $issue_json)
-          issue_body=$(jq '.body' <<<  $issue_json)
 
           if [[ -n $issue_number ]];
           then
             echo "Found ${{ inputs.title }}: ${issue_number}"
             echo "issue_number=${issue_number}" >> $GITHUB_OUTPUT
-            echo "issue_body=${issue_body}" >> $GITHUB_OUTPUT
           else 
             echo "No existing issue found"
           fi
   create_new_issue:
+    needs: find_existing_issue
+    if: needs.find_existing_issue.outputs.issue_number == ''
+    runs-on: ubuntu-latest
+    permissions:
+      repository-projects: write
+      issues: write
+    timeout-minutes: 10
     steps:
+      - uses: actions/checkout@v4
       - name: Create new issue
-        if: steps.find_existing_issue.outputs.issue_number != ''      
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "Found existing issue: ${{ steps.find_existing_issue.outputs.issue_number }}"
+          current_run_url=$(gh run view ${{ github.run_id }} \
+            --repo ${{ github.repository }} \
+            --json jobs \
+            --jq '.jobs[] | select(.name == "${{ github.job }}") | .url'
+          )
+
+          echo "${current_run_url}"
+
+          gh issue create \
+            --title "${{ inputs.title_prefix }} ${{ inputs.title }}" \
+            --body="url,date,count
+            --label Flake
+            ${current_run_url},${{ inputs.date }},1"
+  update_existing_issue:
+    needs: find_existing_issue
+    if: needs.find_existing_issue.outputs.issue_number
+    runs-on: ubuntu-latest
+    permissions:
+      repository-projects: write
+      issues: write
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update existing issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          current_run_url=$(gh run view ${{ github.run_id }} \
+            --repo ${{ github.repository }} \
+            --json jobs \
+            --jq '.jobs[] | select(.name == "${{ github.job }}") | .url'
+          )
+
+          old_body=$(gh issue view ${{ needs.find_existing_issue.outputs.issue_number }} --json=body --jq='.body')
+          new_entry="| ${current_run_url} | ${{ inputs.date }} |"
+          new_body="${old_body}
+          ${new_entry}"
+
+          gh issue edit ${{ needs.find_existing_issue.outputs.issue_number }} \
+            --body="${new_body}"
+
+          echo "current_run_url:     ${current_run_url}"
+          echo "old_body:            ${old_body}"
+          echo "new_entry:           ${new_entry}"
+          echo "new_body:            ${new_body}"
